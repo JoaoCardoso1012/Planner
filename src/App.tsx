@@ -10,42 +10,14 @@ import {
   Target, 
   AlertCircle,
   ChevronRight,
-  Clock,
-  LogOut,
-  LogIn
+  Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AppData, Subject, Stats, ScheduleItem } from './types';
-import { 
-  auth, 
-  db, 
-  loginWithGoogle, 
-  logout, 
-  handleFirestoreError, 
-  OperationType 
-} from './firebase';
-import { 
-  onAuthStateChanged, 
-  User 
-} from 'firebase/auth';
-import { 
-  collection, 
-  onSnapshot, 
-  doc, 
-  setDoc, 
-  updateDoc, 
-  getDocs, 
-  query, 
-  orderBy,
-  writeBatch,
-  where
-} from 'firebase/firestore';
+import { AppData, Subject } from './types';
 
 const DAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
   const [data, setData] = useState<AppData | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'subjects' | 'schedule'>('dashboard');
@@ -53,17 +25,21 @@ export default function App() {
   const [solveCount, setSolveCount] = useState(1);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
-  // Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
+  const fetchData = async () => {
+    try {
+      const response = await fetch('/api/data');
+      const result = await response.json();
+      setData(result);
+      setLoading(false);
+    } catch (error) {
+      console.error("Error fetching data:", error);
+    }
+  };
 
-  // Request Notification Permission
   useEffect(() => {
+    fetchData();
+    
+    // Request Notification Permission
     if (Notification.permission === 'granted') {
       setNotificationsEnabled(true);
     }
@@ -78,114 +54,6 @@ export default function App() {
       });
     }
   };
-
-  // Data Listener
-  useEffect(() => {
-    if (!user) {
-      setData(null);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-
-    // Initial check/seed
-    const checkAndSeed = async () => {
-      try {
-        const subjectsSnap = await getDocs(collection(db, 'subjects'));
-        if (subjectsSnap.empty) {
-          const batch = writeBatch(db);
-          
-          const initialSubjects = [
-            { name: "Matemática", commented_questions: 61, exam_questions: 10, solved_questions: 0, order: 0 },
-            { name: "Português", commented_questions: 42, exam_questions: 10, solved_questions: 0, order: 1 },
-            { name: "Física", commented_questions: 36, exam_questions: 6, solved_questions: 0, order: 2 },
-            { name: "Inglês", commented_questions: 32, exam_questions: 6, solved_questions: 0, order: 3 },
-            { name: "Química", commented_questions: 44, exam_questions: 6, solved_questions: 0, order: 4 },
-            { name: "Biologia", commented_questions: 44, exam_questions: 6, solved_questions: 0, order: 5 },
-            { name: "Geografia", commented_questions: 52, exam_questions: 6, solved_questions: 0, order: 6 },
-            { name: "História", commented_questions: 43, exam_questions: 6, solved_questions: 0, order: 7 },
-            { name: "Redação", commented_questions: 7, exam_questions: 0, solved_questions: 0, order: 8 },
-          ];
-
-          initialSubjects.forEach((s) => {
-            const newDoc = doc(collection(db, 'subjects'));
-            batch.set(newDoc, s);
-          });
-
-          batch.set(doc(db, 'stats', 'global'), {
-            exam_date: '2026-04-27',
-            daily_goal_questions: 9,
-            weekly_goal_essays: 1
-          });
-
-          const initialSchedule = [
-            { day_of_week: "Segunda", tasks: "Revisão Matemática, Português, Redação", order: 0 },
-            { day_of_week: "Terça", tasks: "Revisão Português, História, Geografia", order: 1 },
-            { day_of_week: "Quarta", tasks: "Revisão História e Geografia, Inglês, Português", order: 2 },
-            { day_of_week: "Quinta", tasks: "Revisão Química e Biologia, Física, Matemática", order: 3 },
-            { day_of_week: "Sexta", tasks: "Revisão Física, Química, Matemática", order: 4 },
-            { day_of_week: "Sábado", tasks: "Biologia, Revisão Total Matérias", order: 5 },
-            { day_of_week: "Domingo", tasks: "Simulado", order: 6 },
-          ];
-
-          initialSchedule.forEach((s) => {
-            const newDoc = doc(collection(db, 'schedule'));
-            batch.set(newDoc, s);
-          });
-
-          await batch.commit();
-        }
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, 'initial_seed');
-      }
-    };
-
-    checkAndSeed();
-
-    // Listeners
-    const unsubSubjects = onSnapshot(query(collection(db, 'subjects'), orderBy('order')), (snap) => {
-      const subjects = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
-      setData(prev => ({ ...prev!, subjects }));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'subjects'));
-
-    const unsubStats = onSnapshot(doc(db, 'stats', 'global'), (snap) => {
-      if (snap.exists()) {
-        const stats = snap.data() as Stats;
-        // Calculate days remaining
-        const now = new Date();
-        const examDate = new Date(stats.exam_date);
-        const diffTime = examDate.getTime() - now.getTime();
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        stats.days_until_exam = Math.max(0, diffDays);
-        setData(prev => ({ ...prev!, stats }));
-      }
-    }, (err) => handleFirestoreError(err, OperationType.GET, 'stats/global'));
-
-    const unsubSchedule = onSnapshot(query(collection(db, 'schedule'), orderBy('order')), (snap) => {
-      const schedule = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
-      setData(prev => ({ ...prev!, schedule }));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'schedule'));
-
-    // Completions Listener
-    const now = new Date();
-    const offset = now.getTimezoneOffset();
-    const localDate = new Date(now.getTime() - (offset * 60 * 1000));
-    const todayStr = localDate.toISOString().split('T')[0];
-
-    const unsubCompletions = onSnapshot(query(collection(db, 'completions'), where('date', '==', todayStr)), (snap) => {
-      const completions = snap.docs.map(d => d.data() as any);
-      setData(prev => ({ ...prev!, completions }));
-      setLoading(false);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'completions'));
-
-    return () => {
-      unsubSubjects();
-      unsubStats();
-      unsubSchedule();
-      unsubCompletions();
-    };
-  }, [user]);
 
   // Notifications logic
   useEffect(() => {
@@ -207,385 +75,439 @@ export default function App() {
   }, [data, notificationsEnabled, loading]);
 
   const handleSolve = async () => {
-    if (!showSolveModal || !data) return;
+    if (!showSolveModal) return;
     try {
-      const subjectRef = doc(db, 'subjects', showSolveModal.id.toString());
-      await updateDoc(subjectRef, {
-        solved_questions: showSolveModal.solved_questions + solveCount
+      await fetch(`/api/subjects/${showSolveModal.id}/solve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: solveCount })
       });
       setShowSolveModal(null);
       setSolveCount(1);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `subjects/${showSolveModal.id}`);
+      fetchData();
+    } catch (error) {
+      console.error("Error solving questions:", error);
     }
   };
 
   const toggleTask = async (index: number, currentStatus: boolean) => {
-    if (!data) return;
     try {
-      const now = new Date();
-      const offset = now.getTimezoneOffset();
-      const localDate = new Date(now.getTime() - (offset * 60 * 1000));
-      const todayStr = localDate.toISOString().split('T')[0];
-      const completionId = `${todayStr}_${index}`;
-
-      await setDoc(doc(db, 'completions', completionId), {
-        date: todayStr,
-        task_index: index,
-        completed: !currentStatus ? 1 : 0
+      await fetch('/api/tasks/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_index: index, completed: !currentStatus })
       });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'completions');
+      fetchData();
+    } catch (error) {
+      console.error("Error toggling task:", error);
     }
   };
 
-  if (authLoading) {
+  const updateStats = async (days: string, goal: string) => {
+    try {
+      await fetch('/api/stats/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days_until_exam: days, daily_goal_questions: goal })
+      });
+      fetchData();
+    } catch (error) {
+      console.error("Error updating stats:", error);
+    }
+  };
+
+  if (loading || !data) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-[#E4E3E0]">
+      <div className="flex items-center justify-center min-h-screen bg-slate-50">
         <motion.div 
           animate={{ rotate: 360 }}
           transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-          className="w-8 h-8 border-4 border-[#141414] border-t-transparent rounded-full"
+          className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"
         />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-[#E4E3E0] flex items-center justify-center p-6">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-white p-8 rounded-3xl border-2 border-[#141414] shadow-[8px_8px_0px_0px_#141414] max-w-sm w-full text-center space-y-6"
-        >
-          <div className="w-16 h-16 bg-[#141414] text-white rounded-2xl flex items-center justify-center mx-auto">
-            <BookOpen size={32} />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold">UNIVESP Planner</h1>
-            <p className="text-sm opacity-60 mt-2">Acesse sua conta para organizar seus estudos de forma independente.</p>
-          </div>
-          <button 
-            onClick={loginWithGoogle}
-            className="w-full flex items-center justify-center gap-3 p-4 bg-[#141414] text-white rounded-xl font-bold hover:opacity-90 transition-opacity"
-          >
-            <LogIn size={20} />
-            Entrar com Google
-          </button>
-        </motion.div>
-      </div>
-    );
-  }
-
-  if (loading || !data || !data.stats || !data.subjects || !data.schedule) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-[#E4E3E0]">
-        <div className="text-center space-y-4">
-          <motion.div 
-            animate={{ rotate: 360 }}
-            transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-            className="w-8 h-8 border-4 border-[#141414] border-t-transparent rounded-full mx-auto"
-          />
-          <p className="text-xs font-mono opacity-50 uppercase tracking-widest">Sincronizando Nuvem...</p>
-        </div>
       </div>
     );
   }
 
   const subjectsExceptEssay = data.subjects.filter(s => s.name !== 'Redação');
   const essaySubject = data.subjects.find(s => s.name === 'Redação');
-  
-  const questionsSolved = subjectsExceptEssay.reduce((acc, s) => acc + s.solved_questions, 0);
-  const questionsTotal = subjectsExceptEssay.reduce((acc, s) => acc + s.commented_questions, 0);
-  
-  const essaysSolved = essaySubject?.solved_questions || 0;
-  const essaysTotal = essaySubject?.commented_questions || 0;
-  
-  const todayName = DAYS[new Date().getDay()];
-  const todaySchedule = data.schedule.find(s => s.day_of_week === todayName);
-  const todayTasks = todaySchedule?.tasks.split(',') || [];
-
-  const allTasksDone = todayTasks.length > 0 && todayTasks.every((_, i) => 
-    data.completions?.find(c => c.task_index === i)?.completed === 1
-  );
-  
-  const isGoalMet = questionsSolved >= data.stats.daily_goal_questions && allTasksDone;
 
   return (
-    <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans pb-24">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-indigo-100 selection:text-indigo-900 pb-24">
       {/* Header */}
-      <header className="p-6 border-b border-[#141414] bg-white sticky top-0 z-10">
-        <div className="flex items-center justify-between max-w-2xl mx-auto">
+      <header className="bg-white border-b border-slate-200 px-6 py-8 md:px-10">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">UNIVESP</h1>
-            <p className="text-xs font-mono opacity-50 uppercase tracking-widest">Planejamento de Estudos</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <span className="text-3xl font-bold font-mono">{data.stats.days_until_exam}</span>
-              <p className="text-[10px] font-mono opacity-50 uppercase">Dias Restantes</p>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Sistema Online</span>
             </div>
-            <button 
-              onClick={logout}
-              className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-              title="Sair"
-            >
-              <LogOut size={20} />
-            </button>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+              UNIVESP <span className="text-indigo-600">Planner</span>
+            </h1>
+          </div>
+          
+          <div className="flex flex-wrap gap-3">
+            {!notificationsEnabled && (
+              <button 
+                onClick={requestNotificationPermission}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors"
+              >
+                Ativar Notificações
+              </button>
+            )}
+            <div className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold">
+              {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto p-4 space-y-6">
+      {/* Main Content */}
+      <main className="px-6 md:px-10 py-10 max-w-7xl mx-auto">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 text-slate-50 group-hover:text-slate-100 transition-colors duration-500">
+              <Calendar size={120} />
+            </div>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Dias para o Exame</p>
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-5xl font-bold text-slate-900">{data.stats.days_until_exam}</h2>
+              <span className="text-sm font-medium text-slate-400">dias</span>
+            </div>
+            <div className="mt-4 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(100, (data.stats.days_until_exam / 60) * 100)}%` }}
+                className="h-full bg-indigo-600"
+              />
+            </div>
+          </div>
+
+          <div className="bg-indigo-600 text-white p-6 rounded-2xl shadow-lg shadow-indigo-200 relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity duration-500">
+              <Target size={120} />
+            </div>
+            <p className="text-xs font-semibold opacity-70 uppercase tracking-wider mb-2">Meta Diária</p>
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-5xl font-bold">
+                {data.subjects.reduce((acc, s) => acc + s.solved_questions, 0)}
+                <span className="text-2xl opacity-40 mx-1">/</span>
+                {data.stats.daily_goal_questions}
+              </h2>
+            </div>
+            <p className="text-xs mt-2 opacity-70">Questões resolvidas hoje</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 text-slate-50 group-hover:text-slate-100 transition-colors duration-500">
+              <PenTool size={120} />
+            </div>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Redações Semanais</p>
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-5xl font-bold text-slate-900">
+                {essaySubject?.solved_questions || 0}
+                <span className="text-2xl opacity-20 mx-1">/</span>
+                {data.stats.weekly_goal_essays}
+              </h2>
+            </div>
+            <div className="mt-4 flex gap-1.5">
+              {Array.from({ length: data.stats.weekly_goal_essays }).map((_, i) => (
+                <div 
+                  key={i} 
+                  className={`h-1.5 flex-1 rounded-full ${i < (essaySubject?.solved_questions || 0) ? 'bg-indigo-600' : 'bg-slate-100'}`} 
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1 mb-8 bg-white p-1 rounded-xl border border-slate-200 w-fit">
+          {[
+            { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+            { id: 'subjects', label: 'Matérias', icon: BookOpen },
+            { id: 'schedule', label: 'Cronograma', icon: ListTodo },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
+                activeTab === tab.id 
+                  ? 'bg-indigo-600 text-white shadow-sm' 
+                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <tab.icon size={14} />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab Content */}
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
             <motion.div
               key="dashboard"
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-6"
+              exit={{ opacity: 0, y: -10 }}
+              className="grid grid-cols-1 lg:grid-cols-2 gap-10"
             >
-              {/* Goal Banner */}
-              <div className={`p-4 rounded-xl border-2 ${isGoalMet ? 'bg-emerald-50 border-emerald-500' : 'bg-orange-50 border-orange-500'} flex items-center gap-4`}>
-                {isGoalMet ? (
-                  <CheckCircle2 className="text-emerald-500 w-8 h-8 shrink-0" />
-                ) : (
-                  <AlertCircle className="text-orange-500 w-8 h-8 shrink-0" />
-                )}
-                <div>
-                  <h3 className="font-bold">{isGoalMet ? 'Tudo em dia!' : 'Sistema de Cobrança'}</h3>
-                  <p className="text-sm opacity-70">
-                    {isGoalMet 
-                      ? 'Você completou todas as tarefas e bateu a meta de questões!' 
-                      : !allTasksDone 
-                        ? 'Você ainda tem tarefas pendentes para hoje no cronograma.'
-                        : `Faltam questões para atingir sua meta diária de ${data.stats.daily_goal_questions}.`}
-                  </p>
-                </div>
-              </div>
-
-              {/* Stats Grid */}
-              <div className="grid grid-cols-1 gap-4">
-                <div className="bg-white p-4 rounded-xl border border-[#141414] shadow-[4px_4px_0px_0px_#141414]">
-                  <div className="flex items-center gap-2 mb-2 opacity-50">
-                    <Target size={16} />
-                    <span className="text-[10px] font-mono uppercase">Questões Resolvidas</span>
-                  </div>
-                  <div className="text-2xl font-bold font-mono">{questionsSolved}</div>
-                  <div className="text-[10px] opacity-50 mt-1">Total de {questionsTotal}</div>
-                </div>
-                <div className="bg-white p-4 rounded-xl border border-[#141414] shadow-[4px_4px_0px_0px_#141414]">
-                  <div className="flex items-center gap-2 mb-2 opacity-50">
-                    <PenTool size={16} />
-                    <span className="text-[10px] font-mono uppercase">Redações Concluídas</span>
-                  </div>
-                  <div className="text-2xl font-bold font-mono">{essaysSolved}</div>
-                  <div className="text-[10px] opacity-50 mt-1">Total de {essaysTotal}</div>
-                </div>
-              </div>
-
-              {/* Notification Toggle */}
-              {!notificationsEnabled && (
-                <button 
-                  onClick={requestNotificationPermission}
-                  className="w-full bg-blue-50 p-4 rounded-xl border border-blue-200 flex items-center justify-between hover:bg-blue-100 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-blue-600 rounded-lg text-white">
-                      <Clock size={20} />
-                    </div>
-                    <div className="text-left">
-                      <span className="font-bold text-blue-900 block text-sm">Ativar Lembretes</span>
-                      <span className="text-xs text-blue-700 opacity-70">Receba avisos sobre suas metas no navegador</span>
-                    </div>
-                  </div>
-                  <ChevronRight size={20} className="text-blue-400" />
-                </button>
-              )}
-
-              {/* Today's Schedule Card */}
-              <div className="bg-[#141414] text-white p-6 rounded-2xl">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <Calendar size={20} className="text-emerald-400" />
-                    <h2 className="font-bold text-lg">Hoje ({todayName})</h2>
-                  </div>
-                  <span className="text-[10px] font-mono px-2 py-1 bg-white/10 rounded uppercase tracking-wider">Cronograma</span>
+              {/* Today's Tasks */}
+              <section>
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-xl font-bold text-slate-900">Tarefas de Hoje</h3>
+                  <span className="text-xs font-medium text-slate-400">
+                    {DAYS[new Date().getDay()]}
+                  </span>
                 </div>
                 <div className="space-y-3">
-                  {todayTasks.map((task, i) => {
-                    const isDone = data.completions?.find(c => c.task_index === i)?.completed === 1;
+                  {data.schedule.find(s => s.day_of_week === DAYS[new Date().getDay()])?.tasks.split(',').map((task, i) => {
+                    const isCompleted = data.completions?.find(c => c.task_index === i)?.completed === 1;
                     return (
-                      <button 
-                        key={i} 
-                        onClick={() => toggleTask(i, isDone)}
-                        className={`w-full flex items-center justify-between gap-3 p-3 rounded-lg border transition-all ${isDone ? 'bg-emerald-500/20 border-emerald-500/50' : 'bg-white/5 border-white/10'}`}
+                      <button
+                        key={i}
+                        onClick={() => toggleTask(i, isCompleted)}
+                        className={`w-full p-5 rounded-xl border transition-all flex items-center justify-between group ${
+                          isCompleted 
+                            ? 'bg-slate-50 border-slate-200 opacity-60' 
+                            : 'bg-white border-slate-200 hover:border-indigo-300 hover:shadow-md'
+                        }`}
                       >
-                        <div className="flex items-center gap-3">
-                          <div className={`w-2 h-2 rounded-full ${isDone ? 'bg-emerald-400' : 'bg-gray-600'}`} />
-                          <span className={`text-sm ${isDone ? 'line-through opacity-50' : ''}`}>{task.trim()}</span>
+                        <div className="flex items-center gap-4">
+                          <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${
+                            isCompleted ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'
+                          }`}>
+                            {isCompleted && <CheckCircle2 size={12} className="text-white" />}
+                          </div>
+                          <span className={`font-semibold text-sm ${isCompleted ? 'line-through text-slate-400' : 'text-slate-700'}`}>
+                            {task.trim()}
+                          </span>
                         </div>
-                        {isDone && <CheckCircle2 size={16} className="text-emerald-400" />}
+                        <ChevronRight size={14} className={`text-slate-300 group-hover:text-indigo-400 transition-colors ${isCompleted ? 'hidden' : ''}`} />
                       </button>
                     );
                   })}
                 </div>
-              </div>
+              </section>
+
+              {/* Quick Progress */}
+              <section>
+                <h3 className="text-xl font-bold text-slate-900 mb-6">Progresso Rápido</h3>
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <div className="space-y-5">
+                    {subjectsExceptEssay.slice(0, 4).map((subject) => (
+                      <div key={subject.id}>
+                        <div className="flex justify-between items-end mb-1.5">
+                          <span className="text-xs font-bold text-slate-700">{subject.name}</span>
+                          <span className="text-[10px] font-medium text-slate-400">
+                            {subject.solved_questions} / {subject.commented_questions}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(subject.solved_questions / subject.commented_questions) * 100}%` }}
+                            className="h-full bg-indigo-600"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button 
+                    onClick={() => setActiveTab('subjects')}
+                    className="w-full mt-6 p-3 text-indigo-600 bg-indigo-50 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-100 transition-colors"
+                  >
+                    Ver Todas as Matérias
+                  </button>
+                </div>
+              </section>
             </motion.div>
           )}
 
           {activeTab === 'subjects' && (
             <motion.div
               key="subjects"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="space-y-4"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
             >
-              <h2 className="text-xl font-bold px-2">Matérias</h2>
-              <div className="space-y-3">
-                {data.subjects.map((subject) => (
-                  <div 
-                    key={subject.id}
-                    className="bg-white p-4 rounded-xl border border-[#141414] flex items-center justify-between"
-                  >
-                    <div className="flex-1">
-                      <h3 className="font-bold">{subject.name}</h3>
-                      <div className="flex items-center gap-4 mt-1">
-                        <div className="text-[10px] font-mono opacity-50">
-                          RESOLVIDAS: <span className="text-[#141414] font-bold">{subject.solved_questions}</span>
-                        </div>
-                        <div className="text-[10px] font-mono opacity-50">
-                          COMENTADAS: <span className="text-[#141414] font-bold">{subject.commented_questions}</span>
-                        </div>
+              {data.subjects.map((subject) => (
+                <div 
+                  key={subject.id}
+                  className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col hover:shadow-md transition-shadow"
+                >
+                  <div className="flex justify-between items-start mb-4">
+                    <h4 className="text-lg font-bold text-slate-900">{subject.name}</h4>
+                    <span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded text-[10px] font-bold">
+                      {Math.round((subject.solved_questions / subject.commented_questions) * 100)}%
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-3 mb-6">
+                    <div className="flex justify-between items-center">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Questões Comentadas</p>
+                      <p className="text-sm font-bold text-slate-700">{subject.solved_questions} / {subject.commented_questions}</p>
+                    </div>
+                    {subject.exam_questions > 0 && (
+                      <div className="flex justify-between items-center">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Questões de Prova</p>
+                        <p className="text-sm font-bold text-slate-700">{subject.exam_questions}</p>
                       </div>
-                      {/* Progress Bar */}
-                      <div className="w-full h-1.5 bg-gray-100 rounded-full mt-3 overflow-hidden">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${(subject.solved_questions / subject.commented_questions) * 100}%` }}
-                          className="h-full bg-[#141414]"
-                        />
-                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-auto">
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-5">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${(subject.solved_questions / subject.commented_questions) * 100}%` }}
+                        className="h-full bg-indigo-600"
+                      />
                     </div>
                     <button 
                       onClick={() => setShowSolveModal(subject)}
-                      className="ml-4 p-2 bg-[#141414] text-white rounded-lg hover:opacity-90 transition-opacity"
+                      className="w-full p-3 bg-indigo-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
                     >
-                      <Plus size={20} />
+                      <Plus size={14} />
+                      Adicionar Progresso
                     </button>
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </motion.div>
           )}
 
           {activeTab === 'schedule' && (
             <motion.div
               key="schedule"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              className="space-y-4"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-3"
             >
-              <h2 className="text-xl font-bold px-2">Cronograma Semanal</h2>
-              <div className="space-y-3">
-                {data.schedule.map((item) => (
-                  <div 
-                    key={item.id}
-                    className={`p-4 rounded-xl border ${item.day_of_week === todayName ? 'bg-[#141414] text-white border-[#141414]' : 'bg-white border-gray-200'}`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-bold">{item.day_of_week}</span>
-                      {item.day_of_week === todayName && (
-                        <span className="text-[8px] font-mono bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase">Hoje</span>
+              {data.schedule.map((day) => (
+                <div 
+                  key={day.id}
+                  className={`p-6 rounded-2xl border transition-all ${
+                    day.day_of_week === DAYS[new Date().getDay()]
+                      ? 'bg-white border-indigo-200 shadow-md shadow-indigo-50'
+                      : 'bg-white border-slate-200 opacity-60'
+                  }`}
+                >
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <h4 className="text-lg font-bold text-slate-900">{day.day_of_week}</h4>
+                      {day.day_of_week === DAYS[new Date().getDay()] && (
+                        <span className="px-2 py-0.5 bg-indigo-600 text-white rounded text-[8px] font-bold uppercase tracking-wider">Hoje</span>
                       )}
                     </div>
-                    <p className={`text-sm ${item.day_of_week === todayName ? 'opacity-80' : 'opacity-60'}`}>
-                      {item.tasks}
-                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {day.tasks.split(',').map((task, i) => (
+                        <span key={i} className="px-3 py-1 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-semibold">
+                          {task.trim()}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </motion.div>
           )}
         </AnimatePresence>
       </main>
 
-      {/* Navigation Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#141414] p-2 pb-6 flex justify-around items-center z-20">
-        <button 
-          onClick={() => setActiveTab('dashboard')}
-          className={`flex flex-col items-center p-2 rounded-xl transition-colors ${activeTab === 'dashboard' ? 'text-[#141414] bg-gray-100' : 'text-gray-400'}`}
-        >
-          <LayoutDashboard size={24} />
-          <span className="text-[10px] font-mono mt-1 uppercase">Início</span>
-        </button>
-        <button 
-          onClick={() => setActiveTab('subjects')}
-          className={`flex flex-col items-center p-2 rounded-xl transition-colors ${activeTab === 'subjects' ? 'text-[#141414] bg-gray-100' : 'text-gray-400'}`}
-        >
-          <BookOpen size={24} />
-          <span className="text-[10px] font-mono mt-1 uppercase">Matérias</span>
-        </button>
-        <button 
-          onClick={() => setActiveTab('schedule')}
-          className={`flex flex-col items-center p-2 rounded-xl transition-colors ${activeTab === 'schedule' ? 'text-[#141414] bg-gray-100' : 'text-gray-400'}`}
-        >
-          <ListTodo size={24} />
-          <span className="text-[10px] font-mono mt-1 uppercase">Plano</span>
-        </button>
-      </nav>
-
       {/* Solve Modal */}
       <AnimatePresence>
         {showSolveModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
             <motion.div 
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-8 border-t-4 border-[#141414]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSolveModal(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative bg-white w-full max-w-md p-8 rounded-3xl border border-slate-200 shadow-2xl"
             >
-              <h3 className="text-xl font-bold mb-2">Registrar Questões</h3>
-              <p className="text-sm opacity-60 mb-6">Quantas questões de <span className="font-bold text-[#141414]">{showSolveModal.name}</span> você resolveu agora?</p>
+              <h3 className="text-xl font-bold text-slate-900 mb-1">Registrar Progresso</h3>
+              <p className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-8">{showSolveModal.name}</p>
               
-              <div className="flex items-center justify-center gap-8 mb-8">
-                <button 
-                  onClick={() => setSolveCount(Math.max(1, solveCount - 1))}
-                  className="w-12 h-12 rounded-full border-2 border-[#141414] flex items-center justify-center text-2xl font-bold"
-                >
-                  -
-                </button>
-                <span className="text-4xl font-bold font-mono">{solveCount}</span>
-                <button 
-                  onClick={() => setSolveCount(solveCount + 1)}
-                  className="w-12 h-12 rounded-full border-2 border-[#141414] flex items-center justify-center text-2xl font-bold"
-                >
-                  +
-                </button>
-              </div>
+              <div className="space-y-8">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-4">Quantidade de Questões</label>
+                  <div className="flex items-center justify-between gap-4">
+                    <button 
+                      onClick={() => setSolveCount(Math.max(1, solveCount - 1))}
+                      className="w-14 h-14 rounded-xl border border-slate-200 flex items-center justify-center text-xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      -
+                    </button>
+                    <span className="text-5xl font-bold text-slate-900">{solveCount}</span>
+                    <button 
+                      onClick={() => setSolveCount(solveCount + 1)}
+                      className="w-14 h-14 rounded-xl border border-slate-200 flex items-center justify-center text-xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
 
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setShowSolveModal(null)}
-                  className="flex-1 p-4 rounded-xl border border-[#141414] font-bold"
-                >
-                  Cancelar
-                </button>
-                <button 
-                  onClick={handleSolve}
-                  className="flex-1 p-4 rounded-xl bg-[#141414] text-white font-bold"
-                >
-                  Confirmar
-                </button>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setShowSolveModal(null)}
+                    className="flex-1 p-3.5 rounded-xl border border-slate-200 font-bold text-xs text-slate-600 uppercase tracking-wider hover:bg-slate-50 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    onClick={handleSolve}
+                    className="flex-1 p-3.5 rounded-xl bg-indigo-600 text-white font-bold text-xs uppercase tracking-wider hover:bg-indigo-700 transition-colors"
+                  >
+                    Confirmar
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+
+      {/* Settings Modal (Simplified) */}
+      <div className="fixed bottom-8 right-8 z-40">
+        <button 
+          onClick={() => {
+            const days = prompt("Dias para o exame:", data.stats.days_until_exam.toString());
+            const goal = prompt("Meta diária de questões:", data.stats.daily_goal_questions.toString());
+            if (days && goal) updateStats(days, goal);
+          }}
+          className="w-14 h-14 bg-white border border-slate-200 rounded-2xl shadow-lg flex items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-all hover:scale-105 active:scale-95"
+        >
+          <Clock size={24} />
+        </button>
+      </div>
+
+      {/* Footer Info */}
+      <footer className="mt-10 px-6 md:px-10 pb-12 border-t border-slate-200 pt-10">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
+          <div className="flex items-center gap-3 text-slate-400">
+            <BookOpen size={18} />
+            <span className="text-[10px] font-bold uppercase tracking-widest">Planner Independente v1.0</span>
+          </div>
+          <div className="flex gap-8">
+            <div className="text-center md:text-right">
+              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-0.5">Status do Banco</p>
+              <p className="text-xs font-bold text-slate-500">SQLite Local Ativo</p>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
