@@ -25,7 +25,9 @@ const initialData = {
   stats: {
     exam_date: '2026-04-27',
     daily_goal_questions: 9,
-    weekly_goal_essays: 1
+    weekly_goal_essays: 1,
+    total_questions: 2000,
+    vestibular_title: 'UNIVESP 2026'
   },
   schedule: [
     { id: 1, day_of_week: "Segunda", tasks: "Revisão Matemática, Português, Redação" },
@@ -136,9 +138,71 @@ async function startServer() {
     }
   });
 
+  app.post("/api/subjects/update", async (req, res) => {
+    try {
+      const { subjects } = req.body; // Array of { id, commented_questions, name }
+      const data = await readData();
+      
+      subjects.forEach((updatedSub: any) => {
+        const subject = data.subjects.find((s: any) => s.id === updatedSub.id);
+        if (subject) {
+          if (updatedSub.commented_questions !== undefined) {
+            subject.commented_questions = parseInt(updatedSub.commented_questions);
+          }
+          if (updatedSub.name !== undefined) {
+            subject.name = updatedSub.name;
+          }
+        }
+      });
+      
+      await writeData(data);
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to update subjects" });
+    }
+  });
+
+  app.post("/api/subjects/add", async (req, res) => {
+    try {
+      const { name, commented_questions } = req.body;
+      const data = await readData();
+      
+      const newId = data.subjects.length > 0 ? Math.max(...data.subjects.map((s: any) => s.id)) + 1 : 1;
+      const newSubject = {
+        id: newId,
+        name: name || "Nova Matéria",
+        commented_questions: parseInt(commented_questions) || 0,
+        exam_questions: 0,
+        solved_questions: 0
+      };
+      
+      data.subjects.push(newSubject);
+      await writeData(data);
+      res.json({ success: true, subject: newSubject });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to add subject" });
+    }
+  });
+
+  app.delete("/api/subjects/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const data = await readData();
+      
+      data.subjects = data.subjects.filter((s: any) => s.id !== parseInt(id));
+      await writeData(data);
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to delete subject" });
+    }
+  });
+
   app.post("/api/stats/update", async (req, res) => {
     try {
-      const { days_until_exam, daily_goal_questions } = req.body;
+      const { days_until_exam, daily_goal_questions, total_questions, vestibular_title } = req.body;
       const data = await readData();
       
       const examDate = new Date();
@@ -147,12 +211,37 @@ async function startServer() {
 
       data.stats.exam_date = examDateStr;
       data.stats.daily_goal_questions = parseInt(daily_goal_questions);
+      if (total_questions !== undefined) {
+        data.stats.total_questions = parseInt(total_questions);
+      }
+      if (vestibular_title !== undefined) {
+        data.stats.vestibular_title = vestibular_title;
+      }
       
       await writeData(data);
       res.json({ success: true });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to update stats" });
+    }
+  });
+
+  app.post("/api/schedule/update", async (req, res) => {
+    try {
+      const { day_id, tasks } = req.body;
+      const data = await readData();
+      
+      const day = data.schedule.find((d: any) => d.id === parseInt(day_id));
+      if (day) {
+        day.tasks = tasks;
+        await writeData(data);
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ error: "Day not found" });
+      }
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to update schedule" });
     }
   });
 

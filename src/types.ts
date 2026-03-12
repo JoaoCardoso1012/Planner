@@ -12,6 +12,7 @@ export interface Stats {
   days_until_exam: number;
   daily_goal_questions: number;
   weekly_goal_essays: number;
+  total_questions: number;
 }
 
 export interface ScheduleItem {

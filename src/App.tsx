@@ -12,7 +12,6 @@ import {
   ChevronRight,
   Clock,
   Settings,
-  Bell,
   ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -26,11 +25,18 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'subjects' | 'schedule'>('dashboard');
   const [showSolveModal, setShowSolveModal] = useState<Subject | null>(null);
   const [solveCount, setSolveCount] = useState(1);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showDashboardSettings, setShowDashboardSettings] = useState(false);
+  const [showSubjectsSettings, setShowSubjectsSettings] = useState(false);
+  const [showScheduleSettings, setShowScheduleSettings] = useState<number | null>(null);
   const [tempDays, setTempDays] = useState('');
   const [tempGoal, setTempGoal] = useState('');
+  const [tempVestibularTitle, setTempVestibularTitle] = useState('');
+  const [tempSubjects, setTempSubjects] = useState<{[key: number]: { name: string, questions: string }}>({});
+  const [tempTasks, setTempTasks] = useState<string[]>([]);
+  const [newTaskName, setNewTaskName] = useState('');
+  const [newSubjectName, setNewSubjectName] = useState('');
+  const [newSubjectGoal, setNewSubjectGoal] = useState('');
 
   const fetchData = async () => {
     try {
@@ -45,20 +51,7 @@ export default function App() {
 
   useEffect(() => {
     fetchData();
-    if (Notification.permission === 'granted') {
-      setNotificationsEnabled(true);
-    }
   }, []);
-
-  const requestNotificationPermission = async () => {
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') {
-      setNotificationsEnabled(true);
-      new Notification("UNIVESP: Lembretes Ativados!", {
-        body: "Você será lembrado de suas metas ao abrir o app.",
-      });
-    }
-  };
 
   const handleSolve = async () => {
     if (!showSolveModal) return;
@@ -89,16 +82,81 @@ export default function App() {
     }
   };
 
-  const updateStats = async (days: string, goal: string) => {
+  const handleAddSubject = async () => {
+    if (!newSubjectName.trim()) return;
     try {
-      await fetch('/api/stats/update', {
+      await fetch('/api/subjects/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ days_until_exam: days, daily_goal_questions: goal })
+        body: JSON.stringify({ name: newSubjectName, commented_questions: newSubjectGoal || '0' })
+      });
+      setNewSubjectName('');
+      setNewSubjectGoal('');
+      fetchData();
+    } catch (error) {
+      console.error("Error adding subject:", error);
+    }
+  };
+
+  const handleRemoveSubject = async (id: number) => {
+    if (!confirm("Tem certeza que deseja remover esta matéria? Todo o progresso nela será perdido.")) return;
+    try {
+      await fetch(`/api/subjects/${id}`, {
+        method: 'DELETE'
       });
       fetchData();
     } catch (error) {
+      console.error("Error removing subject:", error);
+    }
+  };
+
+  const updateStats = async (days: string, goal: string, subjectUpdates: {[key: number]: { name: string, questions: string }}, vestibularTitle?: string) => {
+    try {
+      // Update general stats
+      await fetch('/api/stats/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          days_until_exam: days, 
+          daily_goal_questions: goal,
+          vestibular_title: vestibularTitle
+        })
+      });
+
+      // Update subjects
+      const subjectsPayload = Object.entries(subjectUpdates).map(([id, data]) => ({
+        id: parseInt(id),
+        commented_questions: data.questions,
+        name: data.name
+      }));
+
+      if (subjectsPayload.length > 0) {
+        await fetch('/api/subjects/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subjects: subjectsPayload })
+        });
+      }
+
+      fetchData();
+    } catch (error) {
       console.error("Error updating stats:", error);
+    }
+  };
+
+  const updateSchedule = async (dayId: number, tasks: string[]) => {
+    try {
+      await fetch('/api/schedule/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          day_id: dayId, 
+          tasks: tasks.join(', ')
+        })
+      });
+      fetchData();
+    } catch (error) {
+      console.error("Error updating schedule:", error);
     }
   };
 
@@ -116,7 +174,8 @@ export default function App() {
 
   const subjectsExceptEssay = data.subjects.filter(s => s.name !== 'Redação');
   const essaySubject = data.subjects.find(s => s.name === 'Redação');
-  const totalSolvedToday = data.subjects.reduce((acc, s) => acc + s.solved_questions, 0);
+  const totalSolvedOverall = data.subjects.reduce((acc, s) => acc + s.solved_questions, 0);
+  const totalQuestionsGoal = data.subjects.reduce((acc, s) => acc + s.commented_questions, 0);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-24">
@@ -131,27 +190,8 @@ export default function App() {
               <h1 className="text-2xl font-black tracking-tight text-slate-900">
                 Study<span className="text-indigo-600">Flow</span>
               </h1>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">UNIVESP 2026</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{data.stats.vestibular_title || 'UNIVESP 2026'}</p>
             </div>
-          </div>
-          
-          <div className="flex gap-2">
-            <button 
-              onClick={requestNotificationPermission}
-              className={`p-3 rounded-2xl transition-all active:scale-90 ${notificationsEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-400'}`}
-            >
-              <Bell size={18} />
-            </button>
-            <button 
-              onClick={() => {
-                setTempDays(data.stats.days_until_exam.toString());
-                setTempGoal(data.stats.daily_goal_questions.toString());
-                setShowSettingsModal(true);
-              }}
-              className="p-3 bg-slate-900 text-white rounded-2xl shadow-lg shadow-slate-200 active:scale-90 transition-all"
-            >
-              <Settings size={18} />
-            </button>
           </div>
         </div>
       </header>
@@ -168,6 +208,23 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               className="space-y-8"
             >
+              {/* Dashboard Header with Settings */}
+              <div className="flex items-center justify-between px-2">
+                <h3 className="text-xl font-bold text-slate-800">Visão Geral</h3>
+                <button 
+                  onClick={() => {
+                    setTempDays(data.stats.days_until_exam.toString());
+                    setTempGoal(data.stats.daily_goal_questions.toString());
+                    setTempVestibularTitle(data.stats.vestibular_title || 'UNIVESP 2026');
+                    setShowDashboardSettings(true);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-100 rounded-2xl text-[10px] font-bold text-slate-500 uppercase tracking-widest shadow-sm active:scale-95 transition-all"
+                >
+                  <Settings size={14} />
+                  Configurar
+                </button>
+              </div>
+
               {/* Modern Stats Cards */}
               <section className="grid grid-cols-1 gap-4">
                 <div className="bg-gradient-to-br from-indigo-600 to-violet-700 p-6 rounded-[32px] text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
@@ -193,6 +250,21 @@ export default function App() {
                     <span className="text-sm font-bold text-slate-400 uppercase">Questões por dia</span>
                   </div>
                   <p className="text-[10px] mt-2 text-indigo-500 font-bold tracking-wider uppercase">Foco e Consistência</p>
+                </div>
+
+                <div className="bg-white p-6 rounded-[32px] shadow-md border border-slate-100">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Progresso Geral</p>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-4xl font-black text-slate-900">{totalSolvedOverall}</span>
+                    <span className="text-sm font-bold text-slate-400 uppercase">de {totalQuestionsGoal} questões</span>
+                  </div>
+                  <div className="mt-4 h-2 bg-slate-50 rounded-full overflow-hidden">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, (totalSolvedOverall / (totalQuestionsGoal || 1)) * 100)}%` }}
+                      className="h-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                    />
+                  </div>
                 </div>
               </section>
 
@@ -271,6 +343,25 @@ export default function App() {
               exit={{ opacity: 0, scale: 0.95 }}
               className="space-y-4"
             >
+              {/* Subjects Header with Settings */}
+              <div className="flex items-center justify-between px-2 mb-2">
+                <h3 className="text-xl font-bold text-slate-800">Suas Matérias</h3>
+                <button 
+                  onClick={() => {
+                    const subMap: {[key: number]: { name: string, questions: string }} = {};
+                    data.subjects.forEach(s => {
+                      subMap[s.id] = { name: s.name, questions: s.commented_questions.toString() };
+                    });
+                    setTempSubjects(subMap);
+                    setShowSubjectsSettings(true);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-100 rounded-2xl text-[10px] font-bold text-slate-500 uppercase tracking-widest shadow-sm active:scale-95 transition-all"
+                >
+                  <Settings size={14} />
+                  Metas
+                </button>
+              </div>
+
               {data.subjects.map((subject) => (
                 <div 
                   key={subject.id}
@@ -322,31 +413,47 @@ export default function App() {
               exit={{ opacity: 0, x: -20 }}
               className="space-y-4"
             >
+              <div className="flex items-center justify-between px-2 mb-2">
+                <h3 className="text-xl font-bold text-slate-800">Sua Agenda</h3>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Toque para editar</p>
+              </div>
               {data.schedule.map((day) => {
                 const isToday = day.day_of_week === DAYS[new Date().getDay()];
                 return (
                   <div 
                     key={day.id}
-                    className={`p-6 rounded-[32px] transition-all border ${
+                    onClick={() => {
+                      setTempTasks(day.tasks.split(',').map(t => t.trim()).filter(t => t));
+                      setShowScheduleSettings(day.id);
+                    }}
+                    className={`p-6 rounded-[32px] transition-all border cursor-pointer group ${
                       isToday
                         ? 'bg-white shadow-md border-indigo-100'
-                        : 'bg-white/40 border-slate-100 opacity-70'
+                        : 'bg-white/40 border-slate-100 opacity-70 hover:opacity-100'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-4">
-                      <h4 className={`text-lg font-bold ${isToday ? 'text-indigo-600' : 'text-slate-700'}`}>{day.day_of_week}</h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className={`text-lg font-bold ${isToday ? 'text-indigo-600' : 'text-slate-700'}`}>{day.day_of_week}</h4>
+                        <Settings size={14} className="text-slate-300 group-hover:text-indigo-400 transition-colors" />
+                      </div>
                       {isToday && (
                         <span className="px-3 py-1 bg-indigo-600 text-white rounded-full text-[10px] font-bold uppercase tracking-widest shadow-lg shadow-indigo-100">Hoje</span>
                       )}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {day.tasks.split(',').map((task, i) => (
-                        <span key={i} className={`px-4 py-2 rounded-2xl text-[11px] font-bold ${
-                          isToday ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-500'
-                        }`}>
-                          {task.trim()}
-                        </span>
+                        task.trim() && (
+                          <span key={i} className={`px-4 py-2 rounded-2xl text-[11px] font-bold ${
+                            isToday ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            {task.trim()}
+                          </span>
+                        )
                       ))}
+                      {day.tasks.trim() === '' && (
+                        <span className="text-[11px] font-bold text-slate-300 italic">Nenhuma atividade</span>
+                      )}
                     </div>
                   </div>
                 );
@@ -451,15 +558,15 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Settings Modal */}
+      {/* Dashboard Settings Modal */}
       <AnimatePresence>
-        {showSettingsModal && (
+        {showDashboardSettings && (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowSettingsModal(false)}
+              onClick={() => setShowDashboardSettings(false)}
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             />
             <motion.div 
@@ -468,11 +575,21 @@ export default function App() {
               exit={{ scale: 0.9, opacity: 0 }}
               className="relative bg-white w-full max-w-sm p-8 rounded-[40px] shadow-2xl"
             >
-              <h3 className="text-xl font-black text-slate-900 mb-6">Configurações</h3>
+              <h3 className="text-xl font-black text-slate-900 mb-6">Configurar Início</h3>
               
               <div className="space-y-6">
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Dias para o Exame</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Título do Vestibular</label>
+                  <input 
+                    type="text"
+                    value={tempVestibularTitle}
+                    onChange={(e) => setTempVestibularTitle(e.target.value)}
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    placeholder="Ex: UNIVESP 2026"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Dias até a Prova</label>
                   <input 
                     type="number"
                     value={tempDays}
@@ -489,24 +606,230 @@ export default function App() {
                     className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   />
                 </div>
+              </div>
 
-                <div className="flex gap-3 pt-4">
-                  <button 
-                    onClick={() => setShowSettingsModal(false)}
-                    className="flex-1 p-4 rounded-2xl bg-slate-100 text-slate-600 font-bold text-xs uppercase tracking-widest"
-                  >
-                    Cancelar
-                  </button>
+              <div className="flex gap-3 pt-8">
+                <button 
+                  onClick={() => setShowDashboardSettings(false)}
+                  className="flex-1 p-4 rounded-2xl bg-slate-100 text-slate-600 font-bold text-xs uppercase tracking-widest"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    updateStats(tempDays, tempGoal, {}, tempVestibularTitle);
+                    setShowDashboardSettings(false);
+                  }}
+                  className="flex-1 p-4 rounded-2xl bg-indigo-600 text-white font-bold text-xs uppercase tracking-widest shadow-lg shadow-indigo-100"
+                >
+                  Salvar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Subjects Settings Modal */}
+      <AnimatePresence>
+        {showSubjectsSettings && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSubjectsSettings(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative bg-white w-full max-w-sm p-8 rounded-[40px] shadow-2xl"
+            >
+              <h3 className="text-xl font-black text-slate-900 mb-6">Metas por Matéria</h3>
+              
+              <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
+                {data.subjects.map(subject => (
+                  <div key={subject.id} className="space-y-2 bg-slate-50 p-4 rounded-2xl border border-slate-100 relative group">
+                    <button 
+                      onClick={() => handleRemoveSubject(subject.id)}
+                      className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                    >
+                      <Plus size={14} className="rotate-45" />
+                    </button>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Nome da Matéria</label>
+                      <input 
+                        type="text"
+                        value={tempSubjects[subject.id]?.name || ''}
+                        onChange={(e) => setTempSubjects({ 
+                          ...tempSubjects, 
+                          [subject.id]: { ...tempSubjects[subject.id], name: e.target.value } 
+                        })}
+                        className="w-full p-2 bg-white border border-slate-100 rounded-xl font-bold text-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Meta de Questões</label>
+                      <input 
+                        type="number"
+                        value={tempSubjects[subject.id]?.questions || ''}
+                        onChange={(e) => setTempSubjects({ 
+                          ...tempSubjects, 
+                          [subject.id]: { ...tempSubjects[subject.id], questions: e.target.value } 
+                        })}
+                        className="w-full p-2 bg-white border border-slate-100 rounded-xl font-bold text-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                {/* Add New Subject Section */}
+                <div className="space-y-2 bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 border-dashed mt-4">
+                  <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-2">Adicionar Nova Matéria</p>
+                  <div>
+                    <input 
+                      type="text"
+                      placeholder="Nome da nova matéria"
+                      value={newSubjectName}
+                      onChange={(e) => setNewSubjectName(e.target.value)}
+                      className="w-full p-2 bg-white border border-indigo-100 rounded-xl font-bold text-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <input 
+                      type="number"
+                      placeholder="Meta de questões"
+                      value={newSubjectGoal}
+                      onChange={(e) => setNewSubjectGoal(e.target.value)}
+                      className="flex-1 p-2 bg-white border border-indigo-100 rounded-xl font-bold text-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                    <button 
+                      onClick={handleAddSubject}
+                      className="px-4 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest active:scale-90 transition-all shadow-md shadow-indigo-100"
+                    >
+                      <Plus size={18} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-8">
+                <button 
+                  onClick={() => setShowSubjectsSettings(false)}
+                  className="flex-1 p-4 rounded-2xl bg-slate-100 text-slate-600 font-bold text-xs uppercase tracking-widest"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    updateStats(data.stats.days_until_exam.toString(), data.stats.daily_goal_questions.toString(), tempSubjects, data.stats.vestibular_title);
+                    setShowSubjectsSettings(false);
+                  }}
+                  className="flex-1 p-4 rounded-2xl bg-indigo-600 text-white font-bold text-xs uppercase tracking-widest shadow-lg shadow-indigo-100"
+                >
+                  Salvar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      {/* Schedule Settings Modal */}
+      <AnimatePresence>
+        {showScheduleSettings !== null && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowScheduleSettings(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative bg-white w-full max-w-sm p-8 rounded-[40px] shadow-2xl"
+            >
+              <h3 className="text-xl font-black text-slate-900 mb-2">Editar Agenda</h3>
+              <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-6">
+                {data.schedule.find(d => d.id === showScheduleSettings)?.day_of_week}
+              </p>
+              
+              <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
+                {tempTasks.map((task, index) => (
+                  <div key={index} className="flex items-center gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <input 
+                      type="text"
+                      value={task}
+                      onChange={(e) => {
+                        const newTasks = [...tempTasks];
+                        newTasks[index] = e.target.value;
+                        setTempTasks(newTasks);
+                      }}
+                      className="flex-1 bg-transparent font-bold text-slate-700 text-sm focus:outline-none"
+                    />
+                    <button 
+                      onClick={() => {
+                        const newTasks = tempTasks.filter((_, i) => i !== index);
+                        setTempTasks(newTasks);
+                      }}
+                      className="w-8 h-8 bg-red-50 text-red-500 rounded-xl flex items-center justify-center active:scale-90 transition-all"
+                    >
+                      <Plus size={14} className="rotate-45" />
+                    </button>
+                  </div>
+                ))}
+
+                {/* Add New Task Section */}
+                <div className="flex gap-2 bg-indigo-50/50 p-3 rounded-2xl border border-indigo-100 border-dashed">
+                  <input 
+                    type="text"
+                    placeholder="Nova atividade..."
+                    value={newTaskName}
+                    onChange={(e) => setNewTaskName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newTaskName.trim()) {
+                        setTempTasks([...tempTasks, newTaskName.trim()]);
+                        setNewTaskName('');
+                      }
+                    }}
+                    className="flex-1 bg-transparent font-bold text-slate-700 text-sm focus:outline-none"
+                  />
                   <button 
                     onClick={() => {
-                      updateStats(tempDays, tempGoal);
-                      setShowSettingsModal(false);
+                      if (newTaskName.trim()) {
+                        setTempTasks([...tempTasks, newTaskName.trim()]);
+                        setNewTaskName('');
+                      }
                     }}
-                    className="flex-1 p-4 rounded-2xl bg-indigo-600 text-white font-bold text-xs uppercase tracking-widest shadow-lg shadow-indigo-100"
+                    className="w-8 h-8 bg-indigo-600 text-white rounded-xl flex items-center justify-center active:scale-90 transition-all shadow-md shadow-indigo-100"
                   >
-                    Salvar
+                    <Plus size={18} />
                   </button>
                 </div>
+              </div>
+
+              <div className="flex gap-3 pt-8">
+                <button 
+                  onClick={() => setShowScheduleSettings(null)}
+                  className="flex-1 p-4 rounded-2xl bg-slate-100 text-slate-600 font-bold text-xs uppercase tracking-widest"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    if (showScheduleSettings !== null) {
+                      updateSchedule(showScheduleSettings, tempTasks);
+                    }
+                    setShowScheduleSettings(null);
+                  }}
+                  className="flex-1 p-4 rounded-2xl bg-indigo-600 text-white font-bold text-xs uppercase tracking-widest shadow-lg shadow-indigo-100"
+                >
+                  Salvar
+                </button>
               </div>
             </motion.div>
           </div>
