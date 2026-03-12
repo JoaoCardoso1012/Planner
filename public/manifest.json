@@ -1,0 +1,17 @@
+{
+  "name": "UNIVESP Planner",
+  "short_name": "UNIVESP",
+  "description": "Planejamento de Estudos Univesp",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E4E3E0",
+  "theme_color": "#141414",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3532/3532138.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
