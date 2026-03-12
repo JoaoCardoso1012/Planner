@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "Subject": {
+      "title": "Subject",
+      "description": "A study subject with question counts",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "commented_questions": { "type": "integer" },
+        "exam_questions": { "type": "integer" },
+        "solved_questions": { "type": "integer" },
+        "order": { "type": "integer" }
+      },
+      "required": ["name", "commented_questions", "exam_questions", "solved_questions"]
+    },
+    "Stats": {
+      "title": "Stats",
+      "description": "Global study statistics and goals",
+      "type": "object",
+      "properties": {
+        "exam_date": { "type": "string", "format": "date" },
+        "daily_goal_questions": { "type": "integer" },
+        "weekly_goal_essays": { "type": "integer" }
+      },
+      "required": ["exam_date", "daily_goal_questions", "weekly_goal_essays"]
+    },
+    "ScheduleItem": {
+      "title": "ScheduleItem",
+      "description": "A task for a specific day of the week",
+      "type": "object",
+      "properties": {
+        "day_of_week": { "type": "string" },
+        "tasks": { "type": "string" },
+        "order": { "type": "integer" }
+      },
+      "required": ["day_of_week", "tasks"]
+    },
+    "TaskCompletion": {
+      "title": "TaskCompletion",
+      "description": "Completion status of a task on a specific date",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "task_index": { "type": "integer" },
+        "completed": { "type": "boolean" }
+      },
+      "required": ["date", "task_index", "completed"]
+    }
+  },
+  "firestore": {
+    "/subjects/{subjectId}": {
+      "schema": "Subject",
+      "description": "Collection of study subjects"
+    },
+    "/stats/global": {
+      "schema": "Stats",
+      "description": "Global configuration and stats"
+    },
+    "/schedule/{itemId}": {
+      "schema": "ScheduleItem",
+      "description": "Weekly study schedule"
+    },
+    "/completions/{completionId}": {
+      "schema": "TaskCompletion",
+      "description": "Daily task completions"
+    }
+  }
+}

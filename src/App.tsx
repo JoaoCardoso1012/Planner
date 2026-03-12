@@ -10,14 +10,42 @@ import {
   Target, 
   AlertCircle,
   ChevronRight,
-  Clock
+  Clock,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AppData, Subject } from './types';
+import { AppData, Subject, Stats, ScheduleItem } from './types';
+import { 
+  auth, 
+  db, 
+  loginWithGoogle, 
+  logout, 
+  handleFirestoreError, 
+  OperationType 
+} from './firebase';
+import { 
+  onAuthStateChanged, 
+  User 
+} from 'firebase/auth';
+import { 
+  collection, 
+  onSnapshot, 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  getDocs, 
+  query, 
+  orderBy,
+  writeBatch,
+  where
+} from 'firebase/firestore';
 
 const DAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [data, setData] = useState<AppData | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'subjects' | 'schedule'>('dashboard');
@@ -25,8 +53,17 @@ export default function App() {
   const [solveCount, setSolveCount] = useState(1);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
+  // Auth Listener
   useEffect(() => {
-    fetchData();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Request Notification Permission
+  useEffect(() => {
     if (Notification.permission === 'granted') {
       setNotificationsEnabled(true);
     }
@@ -42,6 +79,115 @@ export default function App() {
     }
   };
 
+  // Data Listener
+  useEffect(() => {
+    if (!user) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+
+    // Initial check/seed
+    const checkAndSeed = async () => {
+      try {
+        const subjectsSnap = await getDocs(collection(db, 'subjects'));
+        if (subjectsSnap.empty) {
+          const batch = writeBatch(db);
+          
+          const initialSubjects = [
+            { name: "Matemática", commented_questions: 61, exam_questions: 10, solved_questions: 0, order: 0 },
+            { name: "Português", commented_questions: 42, exam_questions: 10, solved_questions: 0, order: 1 },
+            { name: "Física", commented_questions: 36, exam_questions: 6, solved_questions: 0, order: 2 },
+            { name: "Inglês", commented_questions: 32, exam_questions: 6, solved_questions: 0, order: 3 },
+            { name: "Química", commented_questions: 44, exam_questions: 6, solved_questions: 0, order: 4 },
+            { name: "Biologia", commented_questions: 44, exam_questions: 6, solved_questions: 0, order: 5 },
+            { name: "Geografia", commented_questions: 52, exam_questions: 6, solved_questions: 0, order: 6 },
+            { name: "História", commented_questions: 43, exam_questions: 6, solved_questions: 0, order: 7 },
+            { name: "Redação", commented_questions: 7, exam_questions: 0, solved_questions: 0, order: 8 },
+          ];
+
+          initialSubjects.forEach((s) => {
+            const newDoc = doc(collection(db, 'subjects'));
+            batch.set(newDoc, s);
+          });
+
+          batch.set(doc(db, 'stats', 'global'), {
+            exam_date: '2026-04-27',
+            daily_goal_questions: 9,
+            weekly_goal_essays: 1
+          });
+
+          const initialSchedule = [
+            { day_of_week: "Segunda", tasks: "Revisão Matemática, Português, Redação", order: 0 },
+            { day_of_week: "Terça", tasks: "Revisão Português, História, Geografia", order: 1 },
+            { day_of_week: "Quarta", tasks: "Revisão História e Geografia, Inglês, Português", order: 2 },
+            { day_of_week: "Quinta", tasks: "Revisão Química e Biologia, Física, Matemática", order: 3 },
+            { day_of_week: "Sexta", tasks: "Revisão Física, Química, Matemática", order: 4 },
+            { day_of_week: "Sábado", tasks: "Biologia, Revisão Total Matérias", order: 5 },
+            { day_of_week: "Domingo", tasks: "Simulado", order: 6 },
+          ];
+
+          initialSchedule.forEach((s) => {
+            const newDoc = doc(collection(db, 'schedule'));
+            batch.set(newDoc, s);
+          });
+
+          await batch.commit();
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, 'initial_seed');
+      }
+    };
+
+    checkAndSeed();
+
+    // Listeners
+    const unsubSubjects = onSnapshot(query(collection(db, 'subjects'), orderBy('order')), (snap) => {
+      const subjects = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      setData(prev => ({ ...prev!, subjects }));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'subjects'));
+
+    const unsubStats = onSnapshot(doc(db, 'stats', 'global'), (snap) => {
+      if (snap.exists()) {
+        const stats = snap.data() as Stats;
+        // Calculate days remaining
+        const now = new Date();
+        const examDate = new Date(stats.exam_date);
+        const diffTime = examDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        stats.days_until_exam = Math.max(0, diffDays);
+        setData(prev => ({ ...prev!, stats }));
+      }
+    }, (err) => handleFirestoreError(err, OperationType.GET, 'stats/global'));
+
+    const unsubSchedule = onSnapshot(query(collection(db, 'schedule'), orderBy('order')), (snap) => {
+      const schedule = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      setData(prev => ({ ...prev!, schedule }));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'schedule'));
+
+    // Completions Listener
+    const now = new Date();
+    const offset = now.getTimezoneOffset();
+    const localDate = new Date(now.getTime() - (offset * 60 * 1000));
+    const todayStr = localDate.toISOString().split('T')[0];
+
+    const unsubCompletions = onSnapshot(query(collection(db, 'completions'), where('date', '==', todayStr)), (snap) => {
+      const completions = snap.docs.map(d => d.data() as any);
+      setData(prev => ({ ...prev!, completions }));
+      setLoading(false);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'completions'));
+
+    return () => {
+      unsubSubjects();
+      unsubStats();
+      unsubSchedule();
+      unsubCompletions();
+    };
+  }, [user]);
+
+  // Notifications logic
   useEffect(() => {
     if (data && notificationsEnabled && !loading) {
       const totalSolved = data.subjects.reduce((acc, s) => acc + s.solved_questions, 0);
@@ -49,7 +195,7 @@ export default function App() {
       const todaySchedule = data.schedule.find(s => s.day_of_week === todayName);
       const todayTasks = todaySchedule?.tasks.split(',') || [];
       const allTasksDone = todayTasks.length > 0 && todayTasks.every((_, i) => 
-        data.completions.find(c => c.task_index === i)?.completed === 1
+        data.completions?.find(c => c.task_index === i)?.completed === 1
       );
 
       if (totalSolved < data.stats.daily_goal_questions || !allTasksDone) {
@@ -60,48 +206,40 @@ export default function App() {
     }
   }, [data, notificationsEnabled, loading]);
 
-  const fetchData = async () => {
-    try {
-      const res = await fetch('/api/data');
-      const json = await res.json();
-      setData(json);
-    } catch (err) {
-      console.error('Error fetching data:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleSolve = async () => {
-    if (!showSolveModal) return;
+    if (!showSolveModal || !data) return;
     try {
-      await fetch(`/api/subjects/${showSolveModal.id}/solve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: solveCount }),
+      const subjectRef = doc(db, 'subjects', showSolveModal.id.toString());
+      await updateDoc(subjectRef, {
+        solved_questions: showSolveModal.solved_questions + solveCount
       });
       setShowSolveModal(null);
       setSolveCount(1);
-      fetchData();
     } catch (err) {
-      console.error('Error updating solve count:', err);
+      handleFirestoreError(err, OperationType.UPDATE, `subjects/${showSolveModal.id}`);
     }
   };
 
   const toggleTask = async (index: number, currentStatus: boolean) => {
+    if (!data) return;
     try {
-      await fetch('/api/tasks/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_index: index, completed: !currentStatus }),
+      const now = new Date();
+      const offset = now.getTimezoneOffset();
+      const localDate = new Date(now.getTime() - (offset * 60 * 1000));
+      const todayStr = localDate.toISOString().split('T')[0];
+      const completionId = `${todayStr}_${index}`;
+
+      await setDoc(doc(db, 'completions', completionId), {
+        date: todayStr,
+        task_index: index,
+        completed: !currentStatus ? 1 : 0
       });
-      fetchData();
     } catch (err) {
-      console.error('Error toggling task:', err);
+      handleFirestoreError(err, OperationType.WRITE, 'completions');
     }
   };
 
-  if (loading || !data) {
+  if (authLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#E4E3E0]">
         <motion.div 
@@ -109,6 +247,48 @@ export default function App() {
           transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
           className="w-8 h-8 border-4 border-[#141414] border-t-transparent rounded-full"
         />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[#E4E3E0] flex items-center justify-center p-6">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-white p-8 rounded-3xl border-2 border-[#141414] shadow-[8px_8px_0px_0px_#141414] max-w-sm w-full text-center space-y-6"
+        >
+          <div className="w-16 h-16 bg-[#141414] text-white rounded-2xl flex items-center justify-center mx-auto">
+            <BookOpen size={32} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold">UNIVESP Planner</h1>
+            <p className="text-sm opacity-60 mt-2">Acesse sua conta para organizar seus estudos de forma independente.</p>
+          </div>
+          <button 
+            onClick={loginWithGoogle}
+            className="w-full flex items-center justify-center gap-3 p-4 bg-[#141414] text-white rounded-xl font-bold hover:opacity-90 transition-opacity"
+          >
+            <LogIn size={20} />
+            Entrar com Google
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (loading || !data || !data.stats || !data.subjects || !data.schedule) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-[#E4E3E0]">
+        <div className="text-center space-y-4">
+          <motion.div 
+            animate={{ rotate: 360 }}
+            transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+            className="w-8 h-8 border-4 border-[#141414] border-t-transparent rounded-full mx-auto"
+          />
+          <p className="text-xs font-mono opacity-50 uppercase tracking-widest">Sincronizando Nuvem...</p>
+        </div>
       </div>
     );
   }
@@ -127,7 +307,7 @@ export default function App() {
   const todayTasks = todaySchedule?.tasks.split(',') || [];
 
   const allTasksDone = todayTasks.length > 0 && todayTasks.every((_, i) => 
-    data.completions.find(c => c.task_index === i)?.completed === 1
+    data.completions?.find(c => c.task_index === i)?.completed === 1
   );
   
   const isGoalMet = questionsSolved >= data.stats.daily_goal_questions && allTasksDone;
@@ -141,9 +321,18 @@ export default function App() {
             <h1 className="text-2xl font-bold tracking-tight">UNIVESP</h1>
             <p className="text-xs font-mono opacity-50 uppercase tracking-widest">Planejamento de Estudos</p>
           </div>
-          <div className="text-right">
-            <span className="text-3xl font-bold font-mono">{data.stats.days_until_exam}</span>
-            <p className="text-[10px] font-mono opacity-50 uppercase">Dias Restantes</p>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <span className="text-3xl font-bold font-mono">{data.stats.days_until_exam}</span>
+              <p className="text-[10px] font-mono opacity-50 uppercase">Dias Restantes</p>
+            </div>
+            <button 
+              onClick={logout}
+              className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+              title="Sair"
+            >
+              <LogOut size={20} />
+            </button>
           </div>
         </div>
       </header>
@@ -227,7 +416,7 @@ export default function App() {
                 </div>
                 <div className="space-y-3">
                   {todayTasks.map((task, i) => {
-                    const isDone = data.completions.find(c => c.task_index === i)?.completed === 1;
+                    const isDone = data.completions?.find(c => c.task_index === i)?.completed === 1;
                     return (
                       <button 
                         key={i} 
