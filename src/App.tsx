@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppData, Subject } from './types';
+import { storage } from './lib/storage';
 
 const DAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
@@ -40,8 +41,7 @@ export default function App() {
 
   const fetchData = async () => {
     try {
-      const response = await fetch('/api/data');
-      const result = await response.json();
+      const result = storage.getData();
       setData(result);
       setLoading(false);
     } catch (error) {
@@ -56,11 +56,7 @@ export default function App() {
   const handleSolve = async () => {
     if (!showSolveModal) return;
     try {
-      await fetch(`/api/subjects/${showSolveModal.id}/solve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: solveCount })
-      });
+      storage.solveQuestions(showSolveModal.id, solveCount);
       setShowSolveModal(null);
       setSolveCount(1);
       fetchData();
@@ -71,11 +67,7 @@ export default function App() {
 
   const toggleTask = async (index: number, currentStatus: boolean) => {
     try {
-      await fetch('/api/tasks/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_index: index, completed: !currentStatus })
-      });
+      storage.toggleTask(index, !currentStatus);
       fetchData();
     } catch (error) {
       console.error("Error toggling task:", error);
@@ -85,11 +77,7 @@ export default function App() {
   const handleAddSubject = async () => {
     if (!newSubjectName.trim()) return;
     try {
-      await fetch('/api/subjects/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newSubjectName, commented_questions: newSubjectGoal || '0' })
-      });
+      storage.addSubject(newSubjectName, parseInt(newSubjectGoal) || 0);
       setNewSubjectName('');
       setNewSubjectGoal('');
       fetchData();
@@ -101,9 +89,7 @@ export default function App() {
   const handleRemoveSubject = async (id: number) => {
     if (!confirm("Tem certeza que deseja remover esta matéria? Todo o progresso nela será perdido.")) return;
     try {
-      await fetch(`/api/subjects/${id}`, {
-        method: 'DELETE'
-      });
+      storage.deleteSubject(id);
       fetchData();
     } catch (error) {
       console.error("Error removing subject:", error);
@@ -113,29 +99,21 @@ export default function App() {
   const updateStats = async (days: string, goal: string, subjectUpdates: {[key: number]: { name: string, questions: string }}, vestibularTitle?: string) => {
     try {
       // Update general stats
-      await fetch('/api/stats/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          days_until_exam: days, 
-          daily_goal_questions: goal,
-          vestibular_title: vestibularTitle
-        })
+      storage.updateStats({
+        days_until_exam: parseInt(days),
+        daily_goal_questions: parseInt(goal),
+        vestibular_title: vestibularTitle
       });
 
       // Update subjects
       const subjectsPayload = Object.entries(subjectUpdates).map(([id, data]) => ({
         id: parseInt(id),
-        commented_questions: data.questions,
+        commented_questions: parseInt(data.questions),
         name: data.name
       }));
 
       if (subjectsPayload.length > 0) {
-        await fetch('/api/subjects/update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ subjects: subjectsPayload })
-        });
+        storage.updateSubjects(subjectsPayload);
       }
 
       fetchData();
@@ -146,14 +124,7 @@ export default function App() {
 
   const updateSchedule = async (dayId: number, tasks: string[]) => {
     try {
-      await fetch('/api/schedule/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          day_id: dayId, 
-          tasks: tasks.join(', ')
-        })
-      });
+      storage.updateSchedule(dayId, tasks.join(', '));
       fetchData();
     } catch (error) {
       console.error("Error updating schedule:", error);
